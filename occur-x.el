@@ -1,9 +1,9 @@
-;;; occur-x.el --- 
+;;; occur-x.el --- Extra functionality for occur
 
-;; Copyright (C) 2002, 2004, 2012  Free Software Foundation, Inc.
+;; Copyright (C) 2013  Free Software Foundation, Inc.
 
 ;; Author: Juan-Leon Lahoz <juanleon1@gmail.com>
-;; Keywords: occur, search
+;; Keywords: occur, search, convenience
 ;; Version: 0.1
 
 ;; This file is free software; you can redistribute it and/or modify
@@ -23,45 +23,320 @@
 
 ;;; Commentary:
 
+;; occur-x.el adds some extra functionality to occur-mode.  It allows the
+;; user to refine any occur mode with extra regexp based filters.  Use
+;; commands `occur-x-filter-out' and `occur-x-filter' to add positive and
+;; negative filters.  By default those commands are bind to keys "f" and
+;; "k" (from flush and keep).  Use command `occur-x-undo-filter' to remove
+;; filters.  Filters are kept if the buffer is reverted (shortcut "g") or
+;; cloned (shortcut "c").
+
+;; Another useful addition of occur-x to occur-mode is the possibility to
+;; displaying the line numbers in the margin of your choice, instead of
+;; "inside" the occur buffer.  This way every match line in the occur
+;; buffer is exactly the same as in the original buffer.  Customize
+;; variable `occur-linenumbers-in-margin' and face `occur-margin-face' to
+;; your liking.  When displayed in the margin, line numbers won't interfere
+;; with the regexps of the additional filters.
+
+;;; Usage
+
+;; Put this file in your load-path and add this line to your init file:
+
+;; (require 'occur-x)
+
+;;; Feedback
+
+;; Bugs reports, comments, ideas, etc. welcomed.
+
+;; https://github.com/juan-leon/occur-x
 
 ;;; Code:
 
-(defun occur-x--set-margin ()
-  (and linum-mode (linum-mode -1))
-  (setq left-margin-width
-        (progn
-          (goto-char (point-max))
-          (forward-line -1)
-          (- (- (re-search-forward "[0-9]") (search-forward ":")))))
+(defface occur-margin-face
+  '((t :inverse-video nil :underline nil :weight normal
+       :inherit (fringe shadow)))
+  "Face for displaying line numbers in the margin."
+  :group 'matching)
+
+(defcustom occur-linenumbers-in-margin left-margin
+  "*Control where the line numbers are displayed in occur-mode.
+
+Non-nil means display line numbers in left margin, unless special
+value `right-margin' is used.  When this variable to nil, line
+numbers will be inserted into the occur buffer."
+  :type '(choice (const :tag "Left margin" left-margin)
+                 (const :tag "Right margin" right-margin)
+                 (const :tag "Buffer" nil))
+  :group 'matching)
+
+(defvar occur-x-enabled nil
+  "Non-nil if extra features of occur-x are activated.
+
+Setting this variable directly has no effect.  Use function
+`occur-x-enable' instead")
+
+(defvar occur-x-filter-ops nil
+  "Extra filters applied to an occur buffer to refine matches")
+
+(defvar occur-x-original nil
+  "Original occur buffer for a `clone-buffer' operation")
+
+(defun occur-x-enable (arg)
+  "Toggle extra functionalities in `occur-m' on or off.
+
+Extra functionalities are activated if ARG is non-nil."
+  (setq occur-x-enabled arg)
+  (if occur-x-enabled
+      (progn
+        (define-key occur-mode-map "f" 'occur-x-filter-out)
+        (define-key occur-mode-map "k" 'occur-x-filter)
+        (define-key occur-mode-map "u" 'occur-x-undo-filter)
+        (add-hook 'occur-edit-mode-hook 'occur-x-edit-mode)
+        (add-hook 'occur-hook 'occur-x--init))
+    (progn
+        (define-key occur-mode-map "f" nil)
+        (define-key occur-mode-map "k" nil)
+        (define-key occur-mode-map "u" nil)
+        (remove-hook 'occur-edit-mode-hook 'occur-x-edit-mode)
+        (remove-hook 'occur-hook 'occur-x--init))))
+
+(defun occur-x-filter (regexp)
+  "Add a regexp based filter to the occur buffer.
+
+The filter will delete all lines except those containing matches
+for REGEXP.  See `keep-lines' for more information about how
+REGEXP is used.
+
+Filter will remain if buffer is reverted or cloned, and it can be
+un-applied with `occur-x-undo-filter'."
+  (interactive (list (read-regexp "Keep lines matching regexp"
+                                  (car regexp-history))))
+  (occur-x--apply-filter regexp 'occur-x--keep-lines))
+
+(defun occur-x-filter-out (regexp)
+  "Add a regexp based filter to the occur buffer.
+
+The filter will delete all lines that contain matches for REGEXP.
+See `flush-lines' for more information about how REGEXP is used.
+
+Filter will remain if buffer is reverted or cloned, and it can be
+un-applied with `occur-x-undo-filter'."
+  (interactive (list (read-regexp "Remove lines matching regexp"
+                                  (car regexp-history))))
+  (occur-x--apply-filter regexp 'occur-x--flush-lines))
+
+
+(defun occur-x-undo-filter ()
+  "Removes the last filter added to this occur buffer.
+
+The filters are stored in a stack, so additional invocations of
+this command will remove additional filters."
+  (interactive)
+  (when occur-x-filter-ops
+    (pop occur-x-filter-ops)
+    (occur-revert-function nil nil)))
+
+
+(defun occur-x--init ()
+  (set (make-local-variable 'occur-x-filter-ops) nil)
+  (set (make-local-variable 'occur-x-original) (current-buffer))
+  (add-hook 'clone-buffer-hook 'occur-x--clone nil t)
+  ;; When re-running occur, old overlays are piled in pos 1
+  (occur-x--remove-overlays 1)
+  (if occur-linenumbers-in-margin
+      (occur-x--linenums-to-margin)))
+
+
+(defun occur-x--apply-filters (filters)
+  (let (op)
+    (while (setq op (pop filters))
+      (occur-x--apply-filter (car op) (cdr op)))))
+
+
+(defun occur-x--flush-lines (regexp p1 p2)
+  (goto-char p1)
+  (forward-line 1)
+  (setq p2 (copy-marker p2))
+  (while (and (< (point) p2)
+              (re-search-forward regexp p2 t))
+    (goto-char (match-beginning 0))
+    (forward-line 0)
+    (occur-x--remove-overlays (point))
+    (delete-region (point) (progn (forward-line 1) (point))))
+  (set-marker p2 nil))
+
+(defun occur-x--keep-lines (regexp p1 p2)
+  (goto-char p1)
+  (forward-line 1)
+  (setq p2 (copy-marker p2))
+  (while (< (point) p2)
+    (if (re-search-forward regexp (save-excursion (forward-line 1)
+                                                  (point)) t)
+        (forward-line 1)
+      (forward-line 0)
+      (occur-x--remove-overlays (point))
+      (delete-region (point) (progn (forward-line 1) (point)))))
+  (set-marker p2 nil))
+
+
+(defun occur-x--apply-filter (regexp func)
+  (if (cadr occur-revert-arguments)
+      (error "Additional filters do not work with context lines."))
+  (save-excursion
+    (let ((inhibit-read-only t)
+          (posl (occur-x--titles-pos))
+          (p2 (point-max))
+          p1)
+      (while (setq p1 (pop posl))
+        (apply func regexp p1 p2 nil)
+        (setq p2 p1)))
+    (occur-x--remove-overlays (point-max))
+    (occur-x--update-counts))
+  (push (cons regexp func) occur-x-filter-ops))
+
+
+(defun occur-x--update-counts ()
+  (let ((inhibit-read-only t)
+        (posl (occur-x--titles-pos))
+        (p2 (point-max))
+        (grand-total 0)
+        p1)
+    (while (setq p1 (pop posl))
+      (let* ((n (count-lines (save-excursion
+                               (goto-char p1)
+                               (forward-line 1)
+                               (point)) p2)))
+        (setq p2 p1)
+        (goto-char p2)
+        (forward-word 1)
+        (let ((p (point)))
+          (insert-and-inherit (format "%s" n))
+          (delete-region p2 p))
+        (setq grand-total (+ grand-total n))
+        ;; Delete titles where there are no results, but only when
+        ;; multiple buffers were scanned
+        (when (and (<= n 0)
+                   (> (length (nth 2 occur-revert-arguments)) 1))
+          (forward-line 1)
+          (delete-region p2 (point)))))
+    (when (< 1 (length (caddr occur-revert-arguments)))
+      ;; A summary line is present if multiple buffers were scanned
+      (goto-char (point-min))
+      (forward-word 1)
+      (let ((p (point)))
+        (insert-and-inherit (format "%s" grand-total))
+        (delete-region (point-min) p)))))
+
+
+(defun occur-x--titles-pos ()
+  "Return the position of the titles in the occur buffer."
+  (goto-char (point-min))
+  (let ((l nil))
+    (if (< 1 (length (caddr occur-revert-arguments)))
+        (forward-line 1))
+    (while (not (eobp))
+      (push (point) l)
+      (forward-line 1)
+      (if (not (get-text-property (point) 'occur-title))
+          (let ((p (next-single-property-change (point) 'occur-title)))
+            (goto-char (or p (point-max))))))
+    l))
+
+(defun occur-x--clone ()
+  ;; Overlays are not cloned so...
+  (let ((overlays (with-current-buffer occur-x-original
+                    (overlays-in (point-min) (point-max)))))
+    (setq occur-x-original (current-buffer))
+    (dolist (o overlays)
+      (when (overlay-get o 'before-string)
+        (move-overlay (copy-overlay o) (overlay-start o)
+                      (overlay-end o) (current-buffer))))))
+
+(defadvice occur-revert-function (around occur-x-extra-filters activate)
+  "When `occur-x-enabled' is true, re-apply filters after reverting."
+  (if occur-x-enabled
+      (let ((filters (reverse occur-x-filter-ops)))
+        ad-do-it
+        (occur-x--apply-filters filters))
+    ad-do-it))
+
+
+(defun occur-x--remove-overlays (p)
+  (mapc #'(lambda (o) (if (overlay-get o 'before-string)
+                          (delete-overlay o)))
+        (overlays-in p p)))
+
+(defun occur-x--set-margin (&optional width)
+  (when (not width)
+    (setq width 0)
+    (goto-char (point-max))
+    (while (not (bobp))
+      (if (re-search-backward "^\s*\\([0-9]+\\):" 1 1)
+          (setq width (max width
+                           (- (match-end 1)
+                              (match-beginning 1))))
+        (goto-char (point-min)))
+      (goto-char (previous-single-property-change
+                  (point) 'occur-title nil 1))
+      (forward-line -1)))
+  (and (bound-and-true-p linum-mode) (linum-mode -1))
+  (if (equal occur-linenumbers-in-margin 'right-margin)
+      (setq right-margin-width width)
+    (setq left-margin-width width))
   (set-window-buffer (get-buffer-window) (current-buffer)))
 
 (defun occur-x--linenums-to-margin()
   (save-excursion
-    (om--set-margin)
+    (occur-x--set-margin)
     (goto-char (point-min))
     (forward-line 1)
-    (let ((inhibit-read-only t))
+    (let ((inhibit-read-only t)
+          (context (cadr occur-revert-arguments))
+          width side)
+      (if (equal occur-linenumbers-in-margin 'right-margin)
+          (setq width right-margin-width
+                side 'right-margin)
+        (setq width left-margin-width
+              side 'left-margin))
       (while (not (eobp))
-        (let ((p (point)))
-          (when (re-search-forward "^\s*\\([0-9]+\\):" (+ 10 p) t)
+        (if (looking-at "^\s*\\([0-9]+\\):")
             (let ((n (propertize
-                      (format (concat "%" (number-to-string
-                                           left-margin-width) "s")
-                              (match-string 1))
-                      'face 'linum))
-                  (o (make-overlay p p)))
-              (delete-region p (point))
+                      (format (format "%%%ds" width) (match-string 1))
+                      'face 'occur-margin-face))
+                  (o (make-overlay (point) (point))))
+              (delete-region (point) (match-end 0))
               (overlay-put o 'before-string
-                           (propertize " " 'display 
-                                       `((margin left-margin) ,n))))))
-        (forward-line 1))))
+                           (propertize " " 'display
+                                       `((margin ,side) ,n))))
+          (if (and context (looking-at "^\s+:"))
+              (delete-region (point) (match-end 0))))
+        (forward-line 1)))))
 
-;;;; ChangeLog:
+(occur-x-enable t)
+
+;; Code below this point is sort of a hack... Since `occur-edit-mode'
+;; relies heavily in column information present in the buffer, we need to
+;; put it back.  And since `occur-hook' is not called when exiting, we need
+;; an advice to restore column information where it belongs
+
+(defun occur-x-edit-mode ()
+  (when occur-linenumbers-in-margin
+    (let ((occur-linenumbers-in-margin nil))
+      (revert-buffer)
+      (occur-x--set-margin 0)
+      (occur-edit-mode))))
+
+(defadvice occur-cease-edit (after occur-x-cease-edit activate)
+  (if occur-x-enabled
+      (occur-x--init)))
+
+;;;; Change-Log:
 
 ;; 2013-06-10  Juan-Leon Lahoz <juanleon1@gmail.com>
-;; 
-;; 	* occur-x: New package.
-;; 
+;;
+;;  * occur-x: New package.
+;;
 
 (provide 'occur-x)
-;;; memory-usage.el ends here
+;; occur-x.el ends here

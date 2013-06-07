@@ -21,21 +21,21 @@ Add `occur-x.el` to your load-path and this line to your config file:
 
 ```lisp
 (require 'occur-x)
+(add-hook 'occur-mode-hook 'turn-on-occur-x-mode)
 ```
 
 ### Usage
 
 To refine your occur buffer, removing or keeping lines that match any regular
 expression of your choice, press "k" ([K]eep) or "f" ([F]lush).  Press "u" to
-undo the last filter i the stack.  Press "h" to get help on those and the rest
-of occur commands.
+undo the last filter i the stack.
 
 ### Customization
 
 Use function `occur-x-enable` to toggle on or off this functionality.
 
 Type `M-x customize-variable RET occur-linenumbers-in-margin` to customize where
-the line numbers should appear.  Type `M-x customize-face occur-margin-face` if
+the line numbers should appear.  Type `M-x customize-face RET occur-margin-face` if
 you want another face for line numbers when they are in a margin.
 
 ### Contributing

@@ -4,7 +4,7 @@
 
 ;; Author: Juan-Leon Lahoz <juanleon1@gmail.com>
 ;; Keywords: occur, search, convenience
-;; Version: 0.1
+;; Version: 0.1.1
 
 ;; This file is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -41,9 +41,10 @@
 
 ;;; Usage
 
-;; Put this file in your load-path and add this line to your init file:
+;; Put this file in your load-path and add this lines to your init file:
 
 ;; (require 'occur-x)
+;; (add-hook 'occur-mode-hook 'turn-on-occur-x-mode)
 
 ;;; Feedback
 
@@ -70,36 +71,51 @@ numbers will be inserted into the occur buffer."
                  (const :tag "Buffer" nil))
   :group 'matching)
 
-(defvar occur-x-enabled nil
-  "Non-nil if extra features of occur-x are activated.
-
-Setting this variable directly has no effect.  Use function
-`occur-x-enable' instead")
-
 (defvar occur-x-filter-ops nil
   "Extra filters applied to an occur buffer to refine matches")
 
 (defvar occur-x-original nil
   "Original occur buffer for a `clone-buffer' operation")
 
-(defun occur-x-enable (arg)
-  "Toggle extra functionalities in `occur-m' on or off.
+(defvar occur-x-mode-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m "f" 'occur-x-filter-out)
+    (define-key m "k" 'occur-x-filter)
+    (define-key m "u" 'occur-x-undo-filter)
+    m)
+  "Keymap for `occur-x--mode'.")
 
-Extra functionalities are activated if ARG is non-nil."
-  (setq occur-x-enabled arg)
-  (if occur-x-enabled
+;;;###autoload
+(define-minor-mode occur-x-mode
+  "Add some extra functionality to occur-mode.
+
+User can refine the occur matches with any number of extra regexp
+based filters.
+
+Also, the line numbers are displayed in the margin of your
+choice, instead of inside the occur buffer.  This way every match
+line in the occur buffer is exactly the same as in the original
+buffer.  See variable `occur-linenumbers-in-margin' and face
+`occur-margin-face'.  When displayed in the margin, line numbers
+won't interfere with the regexps of the additional filters.
+
+\\{occur-x-mode-map}"
+  :init-value nil
+  :keymap 'occur-x-mode-map
+  :group 'matching
+  :lighter "-x"
+  (if occur-x-mode
       (progn
-        (define-key occur-mode-map "f" 'occur-x-filter-out)
-        (define-key occur-mode-map "k" 'occur-x-filter)
-        (define-key occur-mode-map "u" 'occur-x-undo-filter)
         (add-hook 'occur-edit-mode-hook 'occur-x-edit-mode)
-        (add-hook 'occur-hook 'occur-x--init))
-    (progn
-        (define-key occur-mode-map "f" nil)
-        (define-key occur-mode-map "k" nil)
-        (define-key occur-mode-map "u" nil)
-        (remove-hook 'occur-edit-mode-hook 'occur-x-edit-mode)
-        (remove-hook 'occur-hook 'occur-x--init))))
+        (add-hook 'occur-hook 'occur-x-init))
+    (remove-hook 'occur-edit-mode-hook 'occur-x-edit-mode)
+    (remove-hook 'occur-hook 'occur-x-init)))
+      
+;;;###autoload
+(defun turn-on-occur-x-mode ()
+  "Turn on occur-x-mode unconditionally."
+  (interactive)
+  (occur-x-mode 1))
 
 (defun occur-x-filter (regexp)
   "Add a regexp based filter to the occur buffer.
@@ -137,8 +153,7 @@ this command will remove additional filters."
     (pop occur-x-filter-ops)
     (occur-revert-function nil nil)))
 
-
-(defun occur-x--init ()
+(defun occur-x-init ()
   (set (make-local-variable 'occur-x-filter-ops) nil)
   (set (make-local-variable 'occur-x-original) (current-buffer))
   (add-hook 'clone-buffer-hook 'occur-x--clone nil t)
@@ -254,8 +269,8 @@ this command will remove additional filters."
                       (overlay-end o) (current-buffer))))))
 
 (defadvice occur-revert-function (around occur-x-extra-filters activate)
-  "When `occur-x-enabled' is true, re-apply filters after reverting."
-  (if occur-x-enabled
+  "When `occur-x-mode' is active, re-apply filters after reverting."
+  (if occur-x-mode
       (let ((filters (reverse occur-x-filter-ops)))
         ad-do-it
         (occur-x--apply-filters filters))
@@ -266,6 +281,7 @@ this command will remove additional filters."
   (mapc #'(lambda (o) (if (overlay-get o 'before-string)
                           (delete-overlay o)))
         (overlays-in p p)))
+
 
 (defun occur-x--set-margin (&optional width)
   (when (not width)
@@ -285,6 +301,7 @@ this command will remove additional filters."
       (setq right-margin-width width)
     (setq left-margin-width width))
   (set-window-buffer (get-buffer-window) (current-buffer)))
+
 
 (defun occur-x--linenums-to-margin()
   (save-excursion
@@ -313,7 +330,6 @@ this command will remove additional filters."
               (delete-region (point) (match-end 0))))
         (forward-line 1)))))
 
-(occur-x-enable t)
 
 ;; Code below this point is sort of a hack... Since `occur-edit-mode'
 ;; relies heavily in column information present in the buffer, we need to
@@ -328,15 +344,24 @@ this command will remove additional filters."
       (occur-edit-mode))))
 
 (defadvice occur-cease-edit (after occur-x-cease-edit activate)
-  (if occur-x-enabled
-      (occur-x--init)))
+  (if occur-x-mode
+      (occur-x-init)))
 
-;;;; Change-Log:
+;;; Bugs and limitations:
 
-;; 2013-06-10  Juan-Leon Lahoz <juanleon1@gmail.com>
+;; The extra filter functionality cannot be used with "context" lines
+
+;; Filters are lost when entering into occur-edit-mode
+
+;;; Change-Log:
+
+;; 2013-06-07  Juan-Leon Lahoz <juanleon1@gmail.com>
 ;;
-;;  * occur-x: New package.
+;;  * occur-x: Now, occur-x is a minor mode. Version 0.1.1.
+
+;; 2013-06-06  Juan-Leon Lahoz <juanleon1@gmail.com>
 ;;
+;;  * occur-x: New package.  Version 0.1.
 
 (provide 'occur-x)
-;; occur-x.el ends here
+;;; occur-x.el ends here

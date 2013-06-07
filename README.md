@@ -28,7 +28,7 @@ Add `occur-x.el` to your load-path and this line to your config file:
 
 To refine your occur buffer, removing or keeping lines that match any regular
 expression of your choice, press "k" ([K]eep) or "f" ([F]lush).  Press "u" to
-undo the last filter i the stack.
+undo the last filter in the stack.
 
 ### Customization
 

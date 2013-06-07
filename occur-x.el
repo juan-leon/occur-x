@@ -106,11 +106,11 @@ won't interfere with the regexps of the additional filters.
   :lighter "-x"
   (if occur-x-mode
       (progn
-        (add-hook 'occur-edit-mode-hook 'occur-x-edit-mode)
-        (add-hook 'occur-hook 'occur-x-init))
-    (remove-hook 'occur-edit-mode-hook 'occur-x-edit-mode)
-    (remove-hook 'occur-hook 'occur-x-init)))
-      
+        (add-hook 'occur-edit-mode-hook 'occur-x-edit-mode nil t)
+        (add-hook 'occur-hook 'occur-x-init nil t))
+    (remove-hook 'occur-edit-mode-hook 'occur-x-edit-mode t)
+    (remove-hook 'occur-hook 'occur-x-init t)))
+
 ;;;###autoload
 (defun turn-on-occur-x-mode ()
   "Turn on occur-x-mode unconditionally."
@@ -355,13 +355,7 @@ this command will remove additional filters."
 
 ;;; Change-Log:
 
-;; 2013-06-07  Juan-Leon Lahoz <juanleon1@gmail.com>
-;;
-;;  * occur-x: Now, occur-x is a minor mode. Version 0.1.1.
-
-;; 2013-06-06  Juan-Leon Lahoz <juanleon1@gmail.com>
-;;
-;;  * occur-x: New package.  Version 0.1.
+;; see https://github.com/juan-leon/occur-x
 
 (provide 'occur-x)
 ;;; occur-x.el ends here

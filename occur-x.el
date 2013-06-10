@@ -105,10 +105,7 @@ won't interfere with the regexps of the additional filters.
   :group 'matching
   :lighter "-x"
   (if occur-x-mode
-      (progn
-        (add-hook 'occur-edit-mode-hook 'occur-x-edit-mode nil t)
-        (add-hook 'occur-hook 'occur-x-init nil t))
-    (remove-hook 'occur-edit-mode-hook 'occur-x-edit-mode t)
+      (add-hook 'occur-hook 'occur-x-init nil t)
     (remove-hook 'occur-hook 'occur-x-init t)))
 
 ;;;###autoload
@@ -154,7 +151,8 @@ this command will remove additional filters."
     (occur-revert-function nil nil)))
 
 (defun occur-x-init ()
-  (set (make-local-variable 'occur-x-filter-ops) nil)
+  (unless occur-x-filter-ops
+    (set (make-local-variable 'occur-x-filter-ops) nil))
   (set (make-local-variable 'occur-x-original) (current-buffer))
   (add-hook 'clone-buffer-hook 'occur-x--clone nil t)
   ;; When re-running occur, old overlays are piled in pos 1
@@ -213,6 +211,7 @@ this command will remove additional filters."
 
 (defun occur-x--update-counts ()
   (let ((inhibit-read-only t)
+        (inhibit-modification-hooks t)
         (posl (occur-x--titles-pos))
         (p2 (point-max))
         (grand-total 0)
@@ -336,12 +335,18 @@ this command will remove additional filters."
 ;; put it back.  And since `occur-hook' is not called when exiting, we need
 ;; an advice to restore column information where it belongs
 
-(defun occur-x-edit-mode ()
-  (when occur-linenumbers-in-margin
-    (let ((occur-linenumbers-in-margin nil))
-      (revert-buffer)
-      (occur-x--set-margin 0)
-      (occur-edit-mode))))
+(defadvice occur-edit-mode (around preserve-filters activate)
+  "When `occur-x-mode' is active, re-apply filters after reverting."
+  (if occur-x-mode
+      (let ((filters (reverse occur-x-filter-ops)))
+        (when occur-linenumbers-in-margin
+          (let ((occur-linenumbers-in-margin nil))
+            (revert-buffer)
+            (occur-x--set-margin 0)))
+        ad-do-it
+        (occur-x--apply-filters filters))
+    ad-do-it))
+
 
 (defadvice occur-cease-edit (after occur-x-cease-edit activate)
   (if occur-x-mode
@@ -350,8 +355,6 @@ this command will remove additional filters."
 ;;; Bugs and limitations:
 
 ;; The extra filter functionality cannot be used with "context" lines
-
-;; Filters are lost when entering into occur-edit-mode
 
 ;;; Change-Log:
 
